@@ -87,7 +87,7 @@ pub fn charybdis_model(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #struct_name {
             #find_by_key_funs
-	    #find_all_fun
+            #find_all_fun
             #delete_by_cks_funs
 
             #push_to_collection_consts

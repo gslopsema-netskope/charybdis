@@ -6,6 +6,23 @@ use quote::quote;
 
 const MAX_FIND_BY_FUNCTIONS: usize = 3;
 
+pub(crate) fn find_all_function(
+    struct_name: &syn::Ident,
+    ch_args: &CharybdisMacroArgs,
+    fields: &CharybdisFields,
+) -> TokenStream {
+    find_many_generated_fn(
+        &syn::Ident::new("find_all", proc_macro2::Span::call_site()),
+        &vec![],
+        struct_name,
+        format!(
+            "SELECT {} FROM {}",
+            comma_sep_cols(&fields.db_fields),
+            ch_args.table_name()
+        ),
+    )
+}
+
 /// for up to 3 primary keys, generate find_by_primary_key functions
 pub(crate) fn find_by_primary_keys_functions(
     struct_name: &syn::Ident,

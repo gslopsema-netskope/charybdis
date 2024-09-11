@@ -1,12 +1,15 @@
-use crate::errors::CharybdisError;
-use crate::model::Model;
-use crate::options::{Consistency, ExecutionProfileHandle, RetryPolicy, SerialConsistency};
-use crate::query::{CharybdisQuery, QueryExecutor, QueryValue};
+use std::sync::Arc;
+
+use scylla::_macro_internal::{RowSerializationContext, RowWriter, SerializationError};
 use scylla::batch::{Batch, BatchType};
 use scylla::history::HistoryListener;
 use scylla::serialize::row::SerializeRow;
 use scylla::{CachingSession, QueryResult};
-use std::sync::Arc;
+
+use crate::errors::CharybdisError;
+use crate::model::Model;
+use crate::options::{Consistency, ExecutionProfileHandle, RetryPolicy, SerialConsistency};
+use crate::query::{CharybdisQuery, QueryExecutor, QueryValue};
 
 pub struct CharybdisModelBatch<'a, Val: SerializeRow, M: Model> {
     inner: Batch,
@@ -87,7 +90,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
     pub async fn chunked_insert(
         self,
         db_session: &CachingSession,
-        iter: &Vec<M>,
+        iter: &[M],
         chunk_size: usize,
     ) -> Result<(), CharybdisError> {
         let chunks = iter.chunks(chunk_size);
@@ -95,7 +98,26 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
         for chunk in chunks {
             let mut batch: CharybdisModelBatch<M, M> = CharybdisModelBatch::from_batch(&self.inner);
 
-            batch.append_inserts(chunk)?;
+            batch.append_inserts(chunk);
+
+            batch.execute(db_session).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn chunked_insert_if_not_exist(
+        self,
+        db_session: &CachingSession,
+        iter: &[M],
+        chunk_size: usize,
+    ) -> Result<(), CharybdisError> {
+        let chunks = iter.chunks(chunk_size);
+
+        for chunk in chunks {
+            let mut batch: CharybdisModelBatch<M, M> = CharybdisModelBatch::from_batch(&self.inner);
+
+            batch.append_inserts_if_not_exist(chunk);
 
             batch.execute(db_session).await?;
         }
@@ -106,7 +128,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
     pub async fn chunked_update(
         self,
         db_session: &CachingSession,
-        iter: &Vec<M>,
+        iter: &[M],
         chunk_size: usize,
     ) -> Result<(), CharybdisError> {
         let chunks = iter.chunks(chunk_size);
@@ -114,7 +136,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
         for chunk in chunks {
             let mut batch: CharybdisModelBatch<M, M> = CharybdisModelBatch::from_batch(&self.inner);
 
-            batch.append_updates(chunk)?;
+            batch.append_updates(chunk);
 
             batch.execute(db_session).await?;
         }
@@ -125,7 +147,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
     pub async fn chunked_delete(
         self,
         db_session: &CachingSession,
-        iter: &Vec<M>,
+        iter: &[M],
         chunk_size: usize,
     ) -> Result<(), CharybdisError> {
         let chunks = iter.chunks(chunk_size);
@@ -134,7 +156,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
             let mut batch: CharybdisModelBatch<M, M> = CharybdisModelBatch::from_batch(&self.inner);
 
             for model in chunk {
-                batch.append_delete(model)?;
+                batch.append_delete(model);
             }
 
             batch.execute(db_session).await?;
@@ -146,7 +168,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
     pub async fn chunked_delete_by_partition_key(
         self,
         db_session: &CachingSession,
-        iter: &Vec<M>,
+        iter: &[M],
         chunk_size: usize,
     ) -> Result<(), CharybdisError> {
         let chunks = iter.chunks(chunk_size);
@@ -154,7 +176,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
         for chunk in chunks {
             let mut batch: CharybdisModelBatch<M, M> = CharybdisModelBatch::from_batch(&self.inner);
 
-            batch.append_deletes_by_partition_key(chunk)?;
+            batch.append_deletes_by_partition_key(chunk);
 
             batch.execute(db_session).await?;
         }
@@ -171,7 +193,7 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
     ) -> Result<(), CharybdisError> {
         while !values.is_empty() {
             let chunk: Vec<Val> = values.drain(..std::cmp::min(chunk_size, values.len())).collect();
-            let batch: CharybdisModelBatch<Val, M> = CharybdisModelBatch::from_batch(&self.inner);
+            let mut batch: CharybdisModelBatch<Val, M> = CharybdisModelBatch::from_batch(&self.inner);
 
             batch.append_statements(statement, chunk)?;
 
@@ -181,94 +203,90 @@ impl<'a, Val: SerializeRow, M: Model> CharybdisModelBatch<'a, Val, M> {
         Ok(())
     }
 
-    pub fn append_statements(&self, statement: &str, values: Vec<Val>) -> Result<(), CharybdisError> {
-        let mut batch: CharybdisModelBatch<Val, M> = CharybdisModelBatch::from_batch(&self.inner);
-
+    pub fn append_statements(&mut self, statement: &str, values: Vec<Val>) -> Result<(), CharybdisError> {
         for val in values {
-            batch.append_statement(statement, val)?;
+            self.append_statement(statement, val);
         }
 
         Ok(())
     }
 
-    pub fn append_insert(&mut self, model: &'a M) -> Result<(), CharybdisError> {
+    pub fn append_insert(&mut self, model: &'a M) -> &mut Self {
         self.append_query_to_batch(M::INSERT_QUERY);
-
         self.values.push(QueryValue::Model(model));
-
-        Ok(())
+        self
     }
 
-    pub fn append_inserts(&mut self, iter: &'a [M]) -> Result<(), CharybdisError> {
+    pub fn append_inserts(&mut self, iter: &'a [M]) -> &mut Self {
         for model in iter {
-            let result = self.append_insert(model);
-            result?
+            self.append_insert(model);
         }
-
-        Ok(())
+        self
     }
 
-    pub fn append_update(&mut self, model: &'a M) -> Result<(), CharybdisError> {
+    pub fn append_insert_if_not_exist(&mut self, model: &'a M) -> &mut Self {
+        self.append_query_to_batch(M::INSERT_IF_NOT_EXIST_QUERY);
+        self.values.push(QueryValue::Model(model));
+        self
+    }
+
+    pub fn append_inserts_if_not_exist(&mut self, iter: &'a [M]) -> &mut Self {
+        for model in iter {
+            self.append_insert_if_not_exist(model);
+        }
+        self
+    }
+
+    pub fn append_update(&mut self, model: &'a M) -> &mut Self {
         self.append_query_to_batch(M::UPDATE_QUERY);
-
         self.values.push(QueryValue::Model(model));
-
-        Ok(())
+        self
     }
 
-    pub fn append_updates(&mut self, iter: &'a [M]) -> Result<(), CharybdisError> {
+    pub fn append_updates(&mut self, iter: &'a [M]) -> &mut Self {
         for model in iter {
-            let result = self.append_update(model);
-            result?
+            self.append_update(model);
         }
-
-        Ok(())
+        self
     }
 
-    pub fn append_delete(&mut self, model: &M) -> Result<(), CharybdisError> {
+    pub fn append_delete(&mut self, model: &M) -> &mut Self {
         self.append_query_to_batch(M::DELETE_QUERY);
-
         self.values.push(QueryValue::PrimaryKey(model.primary_key_values()));
-
-        Ok(())
+        self
     }
 
-    pub fn append_deletes(&mut self, iter: &[M]) -> Result<(), CharybdisError> {
+    pub fn append_deletes(&mut self, iter: &[M]) -> &mut Self {
         for model in iter {
-            let result = self.append_delete(model);
-            result?;
+            self.append_delete(model);
         }
-
-        Ok(())
+        self
     }
 
-    pub fn append_delete_by_partition_key(&mut self, model: &'a M) -> Result<(), CharybdisError> {
+    pub fn append_delete_by_partition_key(&mut self, model: &'a M) -> &mut Self {
         self.append_query_to_batch(M::DELETE_BY_PARTITION_KEY_QUERY);
-
         self.values.push(QueryValue::PartitionKey(model.partition_key_values()));
-
-        Ok(())
+        self
     }
 
-    pub fn append_deletes_by_partition_key(&mut self, iter: &'a [M]) -> Result<(), CharybdisError> {
+    pub fn append_deletes_by_partition_key(&mut self, iter: &'a [M]) -> &mut Self {
         for model in iter {
-            let result = self.append_delete_by_partition_key(model);
-            result?
+            self.append_delete_by_partition_key(model);
         }
-
-        Ok(())
+        self
     }
 
-    pub fn append_statement(&mut self, statement: &str, val: Val) -> Result<(), CharybdisError> {
+    pub fn append_statement(&mut self, statement: &str, val: Val) -> &mut Self {
         self.append_query_to_batch(statement);
-
         self.values.push(QueryValue::Owned(val));
-
-        Ok(())
+        self
     }
 
     pub async fn execute(&self, db_session: &CachingSession) -> Result<QueryResult, CharybdisError> {
-        let result = db_session.batch(&self.inner, &self.values).await?;
+        let result = db_session
+            .batch(&self.inner, &self.values)
+            .await
+            .map_err(|e| CharybdisError::BatchError(M::DB_MODEL_NAME, e))?;
 
         Ok(result)
     }
@@ -324,9 +342,29 @@ pub trait ModelBatch<'a>: Model {
 
 impl<M: Model> ModelBatch<'_> for M {}
 
+struct SerializeRowBox<'a> {
+    inner: Box<dyn SerializeRow + Sync + Send + 'a>,
+}
+
+impl<'a> SerializeRowBox<'a> {
+    pub fn new(val: impl SerializeRow + 'a + Sync + Send) -> Self {
+        Self { inner: Box::new(val) }
+    }
+}
+
+impl<'a> SerializeRow for SerializeRowBox<'a> {
+    fn serialize(&self, ctx: &RowSerializationContext<'_>, writer: &mut RowWriter) -> Result<(), SerializationError> {
+        self.inner.as_ref().serialize(ctx, writer)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.as_ref().is_empty()
+    }
+}
+
 pub struct CharybdisBatch<'a> {
     inner: Batch,
-    values: Vec<Box<dyn SerializeRow + 'a>>,
+    values: Vec<SerializeRowBox<'a>>,
 }
 
 impl<'a> CharybdisBatch<'a> {
@@ -344,11 +382,31 @@ impl<'a> CharybdisBatch<'a> {
         }
     }
 
-    pub fn append<Val: SerializeRow, M: Model, RtQe: QueryExecutor>(
-        &mut self,
-        query: CharybdisQuery<'a, Val, M, RtQe>,
-    ) {
-        self.inner.append_statement(query.contents().as_str());
-        self.values.push(Box::new(query.values));
+    pub fn append<Val, M, RtQe>(&mut self, query: CharybdisQuery<'a, Val, M, RtQe>) -> &mut Self
+    where
+        Val: SerializeRow + Sync + Send,
+        M: Model + Sync + Send,
+        RtQe: QueryExecutor,
+    {
+        self.inner.append_statement(query.query_string);
+
+        self.values.push(SerializeRowBox::new(query.values));
+
+        self
+    }
+
+    pub async fn execute(&self, db_session: &CachingSession) -> Result<QueryResult, CharybdisError> {
+        let result = db_session
+            .batch(&self.inner, &self.values)
+            .await
+            .map_err(|e| CharybdisError::BatchError("QueryBatchError", e))?;
+
+        Ok(result)
     }
 }
+
+impl<'a> Default for CharybdisBatch<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+ }

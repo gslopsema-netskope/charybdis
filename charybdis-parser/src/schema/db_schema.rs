@@ -1,12 +1,13 @@
-use crate::errors::DbSchemaParserError;
-use crate::schema::secondary_indexes::{IndexTarget, SecondaryIndex};
-use crate::schema::{SchemaObject, SchemaObjects};
+use std::collections::HashMap;
+
 use colored::Colorize;
 use scylla::Session;
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
-use std::collections::HashMap;
-use std::path::PathBuf;
+
+use crate::errors::DbSchemaParserError;
+use crate::schema::secondary_indexes::{IndexTarget, SecondaryIndex};
+use crate::schema::{SchemaObject, SchemaObjects};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DbSchema {
@@ -85,7 +86,7 @@ impl DbSchema {
             ALLOW FILTERING
         "#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name,)).await?.rows {
+        if let Some(rows) = session.query_unpaged(cql, (&self.keyspace_name,)).await?.rows {
             for row in rows {
                 let table_name: (String,) = row.into_typed::<(String,)>()?;
                 self.tables.insert(table_name.0.clone(), SchemaObject::new());
@@ -112,14 +113,17 @@ impl DbSchema {
             AND table_name = ?
             ALLOW FILTERING"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &table_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &table_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let str_value: (String, String) = row.into_typed::<(String, String)>()?;
                 self.tables
                     .get_mut(table_name)
                     .unwrap()
-                    .fields
-                    .insert(str_value.0, str_value.1);
+                    .push_field(str_value.0, str_value.1, false);
             }
         }
 
@@ -140,7 +144,11 @@ impl DbSchema {
             AND kind = 'partition_key'
             ALLOW FILTERING"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &table_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &table_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let str_value: (String,) = row.into_typed::<(String,)>()?;
                 self.tables
@@ -168,7 +176,11 @@ impl DbSchema {
             AND kind = 'clustering'
             ALLOW FILTERING"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &table_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &table_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let str_value: (String,) = row.into_typed::<(String,)>()?;
                 self.tables
@@ -195,7 +207,11 @@ impl DbSchema {
             AND table_name = ?
             ALLOW FILTERING"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &table_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &table_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let value: (String, SecondaryIndex) = row.into_typed()?;
                 let table_schema = self.tables.get_mut(table_name).unwrap();
@@ -228,16 +244,14 @@ impl DbSchema {
             FROM system_schema.types
             WHERE keyspace_name = ?"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name,)).await?.rows {
+        if let Some(rows) = session.query_unpaged(cql, (&self.keyspace_name,)).await?.rows {
             for row in rows {
                 let (type_name, field_names, field_types) = row.into_typed::<(String, Vec<String>, Vec<String>)>()?;
 
                 let mut schema_object = SchemaObject::new();
 
-                for (index, field_name) in field_names.iter().enumerate() {
-                    schema_object
-                        .fields
-                        .insert(field_name.clone(), field_types[index].clone());
+                for (index, field_name) in field_names.into_iter().enumerate() {
+                    schema_object.push_field(field_name, field_types[index].clone(), false);
                 }
 
                 self.udts.insert(type_name.to_lowercase(), schema_object);
@@ -253,7 +267,7 @@ impl DbSchema {
             FROM system_schema.views
             WHERE keyspace_name = ?
             ALLOW FILTERING"#;
-        if let Some(rows) = session.query(cql, (&self.keyspace_name,)).await?.rows {
+        if let Some(rows) = session.query_unpaged(cql, (&self.keyspace_name,)).await?.rows {
             for row in rows {
                 let view_name: (String,) = row.into_typed::<(String,)>()?;
                 self.materialized_views.insert(view_name.0.clone(), SchemaObject::new());
@@ -273,14 +287,17 @@ impl DbSchema {
             WHERE keyspace_name = ?
             AND table_name = ?
             ALLOW FILTERING"#;
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &view_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &view_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let str_value: (String, String) = row.into_typed::<(String, String)>()?;
                 self.materialized_views
                     .get_mut(view_name)
                     .unwrap()
-                    .fields
-                    .insert(str_value.0, str_value.1);
+                    .push_field(str_value.0, str_value.1, false);
             }
         }
 
@@ -300,7 +317,11 @@ impl DbSchema {
             AND kind = 'partition_key'
             ALLOW FILTERING"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &view_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &view_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let str_value: (String,) = row.into_typed::<(String,)>()?;
                 self.materialized_views
@@ -327,7 +348,11 @@ impl DbSchema {
             AND kind = 'clustering'
             ALLOW FILTERING"#;
 
-        if let Some(rows) = session.query(cql, (&self.keyspace_name, &view_name)).await?.rows {
+        if let Some(rows) = session
+            .query_unpaged(cql, (&self.keyspace_name, &view_name))
+            .await?
+            .rows
+        {
             for row in rows {
                 let str_value: (String,) = row.into_typed::<(String,)>()?;
                 self.materialized_views
@@ -342,17 +367,15 @@ impl DbSchema {
     }
 
     pub fn get_current_schema_as_json(&self) -> String {
-        let json = to_string_pretty(&self).unwrap_or_else(|e| {
+        to_string_pretty(&self).unwrap_or_else(|e| {
             panic!("Error serializing schema to json: {}", e);
-        });
-
-        json
+        })
     }
 
-    pub fn write_schema_to_json(&self, project_root: PathBuf) {
+    pub fn write_schema_to_json(&self, project_root: &str) {
         let json = self.get_current_schema_as_json();
 
-        let path = project_root.to_str().unwrap().to_string() + "/current_schema.json";
+        let path = project_root.to_string() + "/current_schema.json";
 
         std::fs::write(path, json).unwrap_or_else(|e| {
             panic!("Error writing schema to json: {}", e);

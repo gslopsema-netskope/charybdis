@@ -1,6 +1,7 @@
-use crate::model::runner::INDEX_SUFFIX;
-use crate::model::ModelType;
 use charybdis_parser::schema::{IndexName, SchemaObject};
+
+use crate::model::ModelType;
+use crate::model::runner::INDEX_SUFFIX;
 
 type FieldName = String;
 type FieldType = String;
@@ -111,16 +112,16 @@ impl<'a> ModelData<'a> {
     }
 
     fn fetch_new_fields(&mut self) {
-        for (field_name, field_type) in self.current_code_schema.fields.iter() {
-            if !self.current_db_schema.fields.contains_key(field_name) {
+        for (field_name, field_type, _) in self.current_code_schema.fields.iter() {
+            if !self.current_db_schema.contains_field(field_name) {
                 self.new_fields.push((field_name.clone(), field_type.clone()));
             }
         }
     }
 
     fn fetch_removed_fields(&mut self) {
-        for (field_name, _) in self.current_db_schema.fields.iter() {
-            if !self.current_code_schema.fields.contains_key(field_name) {
+        for (field_name, _, _) in self.current_db_schema.fields.iter() {
+            if !self.current_code_schema.contains_field(field_name) {
                 self.removed_fields.push(field_name.clone());
             }
         }
@@ -195,8 +196,8 @@ impl<'a> ModelData<'a> {
     }
 
     fn fetch_changed_field_types(&mut self) {
-        for (field_name, field_type) in self.current_code_schema.fields.iter() {
-            if let Some(db_field_type) = self.current_db_schema.fields.get(field_name) {
+        for (field_name, field_type, _) in self.current_code_schema.fields.iter() {
+            if let Some(db_field_type) = self.current_db_schema.types_by_name.get(field_name) {
                 let code_field_type = field_type.to_lowercase().replace(' ', "");
                 let db_field_type = db_field_type.to_lowercase().replace(' ', "");
 

@@ -1,20 +1,26 @@
-mod array;
-mod hash;
+use std::collections::HashMap;
 
-use crate::macro_args::array::parse_arr_expr_from_literals;
-use crate::macro_args::hash::hash_expr_lit_to_hash;
 use proc_macro2::TokenStream;
 use quote::ToTokens;
-use std::collections::HashMap;
 use syn::parse::{Parse, ParseStream};
 
-#[derive(Debug, Default)]
+use crate::traits::array::ToStringCollection;
+use crate::traits::hash::hash_expr_lit_to_hash;
+
+mod array;
+mod hash;
+pub mod string;
+
+static EMPTY_VEC: Vec<String> = Vec::new();
+
+#[derive(Debug, Default, Clone)]
 pub struct CharybdisMacroArgs {
     pub table_name: Option<String>,
     pub type_name: Option<String>,
     pub base_table: Option<String>,
     pub partition_keys: Option<Vec<String>>,
     pub clustering_keys: Option<Vec<String>>,
+    pub static_columns: Option<Vec<String>>,
     pub global_secondary_indexes: Option<Vec<String>>,
     pub local_secondary_indexes: Option<Vec<String>>,
     pub exclude_partial_model: Option<bool>,
@@ -29,19 +35,28 @@ impl CharybdisMacroArgs {
         self.table_name.clone().expect("table_name is required")
     }
 
-    pub fn partition_keys(&self) -> Vec<String> {
-        self.partition_keys.clone().expect("partition_keys is required")
+    pub fn partition_keys(&self) -> &Vec<String> {
+        self.partition_keys.as_ref().expect("partition_keys is required")
     }
 
-    pub fn clustering_keys(&self) -> Vec<String> {
-        self.clustering_keys.clone().expect("clustering_keys is required")
+    pub fn clustering_keys(&self) -> &Vec<String> {
+        self.clustering_keys.as_ref().expect("clustering_keys is required")
     }
 
-    pub fn primary_key(&self) -> Vec<String> {
-        let mut primary_key = self.partition_keys();
-        primary_key.extend(self.clustering_keys());
+    pub fn static_columns(&self) -> &Vec<String> {
+        self.static_columns.as_ref().map_or(&EMPTY_VEC, |x| x)
+    }
 
-        primary_key
+    pub fn global_secondary_indexes(&self) -> &Vec<String> {
+        self.global_secondary_indexes.as_ref().map_or(&EMPTY_VEC, |x| x)
+    }
+
+    pub fn local_secondary_indexes(&self) -> &Vec<String> {
+        self.local_secondary_indexes.as_ref().map_or(&EMPTY_VEC, |x| x)
+    }
+
+    pub fn primary_key(&self) -> Vec<&String> {
+        self.partition_keys().iter().chain(self.clustering_keys()).collect()
     }
 }
 
@@ -52,6 +67,7 @@ impl Parse for CharybdisMacroArgs {
         let mut base_table = None;
         let mut partition_keys = None;
         let mut clustering_keys = None;
+        let mut static_columns = None;
         let mut global_secondary_indexes = None;
         let mut local_secondary_indexes = None;
         let mut fields_names = None;
@@ -79,25 +95,31 @@ impl Parse for CharybdisMacroArgs {
                 }
                 "partition_keys" => {
                     let array: syn::ExprArray = input.parse()?;
-                    let parsed = parse_arr_expr_from_literals(array);
+                    let parsed = array.to_vec();
 
                     partition_keys = Some(parsed)
                 }
                 "clustering_keys" => {
                     let array: syn::ExprArray = input.parse()?;
-                    let parsed = parse_arr_expr_from_literals(array);
+                    let parsed = array.to_vec();
 
                     clustering_keys = Some(parsed)
                 }
+                "static_columns" => {
+                    let array: syn::ExprArray = input.parse()?;
+                    let parsed = array.to_vec();
+
+                    static_columns = Some(parsed)
+                }
                 "global_secondary_indexes" => {
                     let array: syn::ExprArray = input.parse()?;
-                    let parsed = parse_arr_expr_from_literals(array);
+                    let parsed = array.to_vec();
 
                     global_secondary_indexes = Some(parsed)
                 }
                 "local_secondary_indexes" => {
                     let array: syn::ExprArray = input.parse()?;
-                    let parsed = parse_arr_expr_from_literals(array);
+                    let parsed = array.to_vec();
 
                     local_secondary_indexes = Some(parsed)
                 }
@@ -107,7 +129,7 @@ impl Parse for CharybdisMacroArgs {
                 }
                 "fields_names" => {
                     let array: syn::ExprArray = input.parse()?;
-                    let parsed = parse_arr_expr_from_literals(array);
+                    let parsed = array.to_vec();
 
                     fields_names = Some(parsed)
                 }
@@ -142,6 +164,7 @@ impl Parse for CharybdisMacroArgs {
             base_table,
             partition_keys,
             clustering_keys,
+            static_columns,
             global_secondary_indexes,
             local_secondary_indexes,
             fields_names,

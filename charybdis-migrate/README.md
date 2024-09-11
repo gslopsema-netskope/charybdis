@@ -1,15 +1,21 @@
+[![Crates.io](https://img.shields.io/crates/v/charybdis-migrate)](https://crates.io/crates/charybdis)
+[![License](https://img.shields.io/crates/l/charybdis)]()
+[![Docs.rs](https://docs.rs/charybdis/badge.svg)](https://docs.rs/charybdis)
+[![Discord](https://img.shields.io/discord/1247167793045176461?label=discord-server)](https://discord.gg/enDd57nNen)
+
+## Breaking changes
+
+As of `0.4.13` UDT fields must be in the same order as they are in the database. This is due to
+scylla driver limitation that does not support named bind values. Earlier versions would
+automatically order fields by name, but this is no longer the case as ORM could not work with
+exiting UDTs.
+
 ## Automatic migration Tool:
 
 <a name="automatic-migration"></a>
 `charybdis-migrate` tool that enables automatic migration to database without need to write
-migrations by hand. It expects `src/models` files and generates migrations based on differences
+migrations by hand. It iterates over project files and generates migrations based on differences
 between model definitions and database.
-
-## Announcements:
-
-- ### Breaking changes:
-    - As of **0.4.3** version`local_secondary_indexes` are now defined as list of fields. Partition key part is derived
-      from `partition_keys` part of macro declaration and each element in array will result with new local index.
 
 ### Installation
 
@@ -26,8 +32,10 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
 ## Automatic migration
 
 * <a name="automatic-migration"></a>
-  `charybdis-migrate` enables automatic migration to database without need to write migrations by hand.
-  It expects `src/models` files and generates migrations based on differences between model definitions and database.
+  `charybdis-migrate` enables automatic migration to database without need to write migrations by
+  hand.
+  It expects `src/models` files and generates migrations based on differences between model
+  definitions and database.
   It supports following operations:
     - Create new tables
     - Create new columns
@@ -35,18 +43,18 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
     - Change field types (drop and recreate column `--drop-and-replace` flag)
     - Create secondary indexes
     - Drop secondary indexes
-    - Create UDTs (`src/models/udts`)
-    - Create materialized views (`src/models/materialized_views`)
+    - Create UDTs
+    - Create materialized views
     - Table options
       ```rust
         #[charybdis_model(
             table_name = commits,
             partition_keys = [object_id],
             clustering_keys = [created_at, id],
-            table_options = #r"
-                WITH CLUSTERING ORDER BY (created_at DESC) 
+            table_options = r#"
+                CLUSTERING ORDER BY (created_at DESC) 
                 AND gc_grace_seconds = 86400
-            ";
+            "#
         )]
         #[derive(Serialize, Deserialize, Default)]
         pub struct Commit {...}
@@ -54,14 +62,15 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
       ⚠️ If table exists, table options will result in alter table query that without
       `CLUSTERING ORDER` and `COMPACT STORAGE` options.
 
-      Model dropping is not added. If you don't define model within `src/model` dir
-      it will leave db structure as it is.
+      Model dropping is not added. If you removed model, you need to drop table manually.
 
 * ### Running migration
 
-  ⚠️ If you are working with **existing** datasets, before running migration you need to make sure that your **model
+  ⚠️ If you are working with **existing** datasets, before running migration you need to make sure
+  that your **model
   **
-  definitions structure matches the database in respect to table names, column names, column types, partition keys,
+  definitions structure matches the database in respect to table names, column names, column types,
+  partition keys,
   clustering keys and secondary indexes so you don't alter structure accidentally.
   If structure is matched, it will not run any migrations. As mentioned above,
   in case there is no model definition for table, it will **not** drop it. In future,
@@ -95,9 +104,7 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
 
 ### Define Tables
 
-- Declare model as a struct within `src/models` dir:
-  ```rust
-  // src/models/user.rs
+ ```rust
   use charybdis::macros::charybdis_model;
   use charybdis::types::{Text, Timestamp, Uuid};
   
@@ -118,13 +125,9 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
   }
   ```
 
-(Note we use `src/models` as automatic migration tool expects that dir)
-
 ### Define UDT
 
-- `src/models/udts`
-  ```rust
-  // src/models/udts/address.rs
+ ```rust
   use charybdis::macros::charybdis_udt_model;
   use charybdis::types::Text;
   
@@ -140,10 +143,7 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
 
 ### Define Materialized Views
 
-- `src/models/materialized_views`
-
   ```rust
-  // src/models/materialized_views/users_by_username.rs
   use charybdis::macros::charybdis_view_model;
   use charybdis::types::{Text, Timestamp, Uuid};
   
@@ -163,7 +163,7 @@ migrate --hosts <host> --keyspace <your_keyspace> --drop-and-replace (optional)
   
   ```
 
-  Resulting auto-generated migration query will be:
+Resulting auto-generated migration query will be:
 
   ```sql
   CREATE MATERIALIZED VIEW IF NOT EXISTS users_by_email

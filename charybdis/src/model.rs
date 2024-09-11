@@ -1,4 +1,4 @@
-use crate::SerializeRow;
+use scylla::serialize::row::SerializeRow;
 use scylla::FromRow;
 
 pub trait BaseModel: FromRow + Sized + SerializeRow {
@@ -9,6 +9,7 @@ pub trait BaseModel: FromRow + Sized + SerializeRow {
     const DB_MODEL_NAME: &'static str;
     const FIND_BY_PRIMARY_KEY_QUERY: &'static str;
     const FIND_BY_PARTITION_KEY_QUERY: &'static str;
+    const FIND_FIRST_BY_PARTITION_KEY_QUERY: &'static str;
 
     fn primary_key_values(&self) -> Self::PrimaryKey;
     fn partition_key_values(&self) -> Self::PartitionKey;

@@ -11,24 +11,22 @@ pub mod serializers;
 pub mod stream;
 pub mod types;
 
-// orm macros
 pub mod macros {
     pub use charybdis_macros::{
         char_model_field_attrs_gen, charybdis_model, charybdis_udt_model, charybdis_view_model,
     };
+
+    pub mod scylla {
+        pub use scylla::macros::{FromRow, FromUserType, IntoUserType, SerializeRow, SerializeValue};
+    }
 }
 
-// scylla
-pub use scylla::{
-    cql_to_rust::{FromCqlVal, FromRow, FromRowError},
-    frame::response::result::{CqlValue, Row},
-    frame::value::ValueList,
-    query::Query,
-    serialize::row::SerializeRow,
-    serialize::value::SerializeCql,
-    transport::{errors::QueryError, session::TypedRowIter},
-    CachingSession, QueryResult, Session,
-};
+pub mod scylla {
+    pub use scylla::frame::response::cql_to_rust::{FromCqlVal, FromRow, FromRowError};
+    pub use scylla::frame::response::result::{CqlValue, Row};
+    pub use scylla::serialize::value::SerializeValue;
+    pub use scylla::statement::PagingState;
+}
 
 pub mod options {
     pub use scylla::execution_profile::ExecutionProfileHandle;
@@ -36,6 +34,3 @@ pub mod options {
     pub use scylla::retry_policy::RetryPolicy;
     pub use scylla::statement::{Consistency, SerialConsistency};
 }
-
-// scylla macros
-pub use scylla::macros::{FromRow, FromUserType, IntoUserType, SerializeCql, SerializeRow};

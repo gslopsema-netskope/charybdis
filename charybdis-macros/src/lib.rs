@@ -1,88 +1,106 @@
 extern crate proc_macro;
 
-mod model;
-mod native;
-mod rules;
-mod scylla;
-mod utils;
+use proc_macro::TokenStream;
+
+use quote::quote;
+use syn::parse_macro_input;
+use syn::DeriveInput;
+
+use charybdis_parser::fields::CharybdisFields;
+use charybdis_parser::traits::CharybdisMacroArgs;
 
 use crate::model::*;
 use crate::native::{
-    decrement_counter_methods, delete_by_primary_key_functions, find_all_function, find_by_primary_keys_functions,
-    increment_counter_methods, pull_from_collection_consts, pull_from_collection_methods, push_to_collection_consts,
-    push_to_collection_methods,
+    decrement_counter_methods, delete_by_primary_key_functions, find_all_function, find_by_global_secondary_index,
+    find_by_local_secondary_index, find_by_primary_keys_functions, increment_counter_methods,
+    pull_from_collection_consts, pull_from_collection_consts_if_exists, pull_from_collection_methods,
+    pull_from_collection_methods_if_exists, push_to_collection_consts, push_to_collection_consts_if_exists,
+    push_to_collection_methods, push_to_collection_methods_if_exists,
 };
 use crate::rules::*;
 use crate::scylla::from_row;
-use charybdis_parser::fields::CharybdisFields;
-use charybdis_parser::macro_args::CharybdisMacroArgs;
-use proc_macro::TokenStream;
-use quote::quote;
-use syn::DeriveInput;
-use syn::{parse_macro_input, Data, Fields};
+
+mod model;
+mod native;
+mod rules;
+
+mod scylla;
+mod traits;
 
 /// This macro generates the implementation of the [Model] trait for the given struct.
 #[proc_macro_attribute]
 pub fn charybdis_model(args: TokenStream, input: TokenStream) -> TokenStream {
     let args: CharybdisMacroArgs = parse_macro_input!(args);
-    let mut input: DeriveInput = parse_macro_input!(input);
-    let fields = CharybdisFields::from_input(&input, &args);
 
-    let partial_model_generator = partial_model_macro_generator(&args, &mut input);
+    let mut input: DeriveInput = parse_macro_input!(input);
+    let mut new_fields = CharybdisFields::from_input(&input, &args);
+    let fields = new_fields.populate(&args);
+
+    let struct_name = &input.ident.clone();
+
+    // partial_<model_name>!(StructName, field1, field2, ...);
+    let partial_model_generator = partial_model_macro_generator(&input, &args, fields);
+
+    // Charybdis::BaseModel types
+    let primary_key_type = primary_key_type(fields);
+    let partition_key_type = partition_key_type(fields);
+
+    // Charybdis::BaseModel consts
+    let db_model_name_const = db_model_name_const(&args);
+    let find_by_primary_key_query_const = find_by_primary_key_query_const(&args, fields);
+    let find_by_partition_key_query_consts = find_by_partition_key_query_consts(&args, fields);
+    let find_first_by_partition_key_query_const = find_first_by_partition_key_query_const(&args, fields);
+    let insert_query_const = insert_query_const(&args, fields);
+
+    // Charybdis::Model consts
+    let insert_if_not_exists_query_const = insert_if_not_exists_query_const(&args, fields);
+    let update_query_const = update_query_const(&args, fields);
+    let delete_query_const = delete_query_const(&args, fields);
+    let delete_by_partition_key_query_const = delete_by_partition_key_query_const(&args, fields);
+
+    // Charybdis::BaseModel methods
+    let primary_key_values_method = primary_key_values_method(fields);
+    let partition_key_values_method = partition_key_values_method(fields);
+
+    // Collection consts
+    let push_to_collection_consts = push_to_collection_consts(&args, fields);
+    let push_to_collection_consts_if_exists = push_to_collection_consts_if_exists(&args, fields);
+    let pull_from_collection_consts = pull_from_collection_consts(&args, fields);
+    let pull_from_collection_consts_if_exists = pull_from_collection_consts_if_exists(&args, fields);
+
+    // Collection methods
+    let push_to_collection_methods = push_to_collection_methods(fields);
+    let push_to_collection_methods_if_exists = push_to_collection_methods_if_exists(fields);
+    let pull_from_collection_methods = pull_from_collection_methods(fields);
+    let pull_from_collection_methods_if_exists = pull_from_collection_methods_if_exists(fields);
+
+    // Counter methods
+    let increment_counter_methods = increment_counter_methods(&args, fields);
+    let decrement_counter_methods = decrement_counter_methods(&args, fields);
+
+    // FromRow trait
+    let from_row = from_row(struct_name, fields);
+
+    // Current model macro rules
+    let find_model_query_rule = find_model_query_rule(struct_name, &args, fields);
+    let find_model_rule = find_model_rule(struct_name, &args, fields);
+    let find_first_model_rule = find_first_model_rule(struct_name, &args, fields);
+    let update_model_query_rule = update_model_query_rule(struct_name, &args, fields);
+    let delete_model_query_rule = delete_model_query_rule(struct_name, &args);
+    let delete_model_rule = delete_model_rule(struct_name, &args);
+
+    // Associated functions
+    let find_by_key_funs = find_by_primary_keys_functions(struct_name, &args, fields);
+    let find_all_fun = find_all_function(struct_name, &args, &fields);
+    let find_by_local_secondary_index_funs = find_by_local_secondary_index(struct_name, &args, fields);
+    let find_by_global_secondary_index_funs = find_by_global_secondary_index(struct_name, &args, fields);
+    let delete_by_cks_funs = delete_by_primary_key_functions(&args, fields);
 
     CharybdisFields::proxy_charybdis_attrs_to_scylla(&mut input);
     CharybdisFields::strip_charybdis_attributes(&mut input);
 
-    let struct_name = &input.ident;
-
-    // Charybdis::BaseModel types
-    let primary_key_type = primary_key_type(&fields);
-    let partition_key_type = partition_key_type(&fields);
-
-    // Charybdis::BaseModel consts
-    let db_model_name_const = db_model_name_const(&args);
-    let find_by_primary_key_query_const = find_by_primary_key_query_const(&args, &fields);
-    let find_by_partition_key_query_const = find_by_partition_key_query_const(&args, &fields);
-    let insert_query_const = insert_query_const(&args, &fields);
-
-    // Charybdis::Model consts
-    let insert_if_not_exists_query_const = insert_if_not_exists_query_const(&args, &fields);
-    let update_query_const = update_query_const(&args, &fields);
-    let delete_query_const = delete_query_const(&args, &fields);
-    let delete_by_partition_key_query_const = delete_by_partition_key_query_const(&args, &fields);
-
-    // Charybdis::BaseModel methods
-    let primary_key_values_method = primary_key_values_method(&fields);
-    let partition_key_values_method = partition_key_values_method(&fields);
-
-    // Collection consts
-    let push_to_collection_consts = push_to_collection_consts(&args, &fields);
-    let pull_from_collection_consts = pull_from_collection_consts(&args, &fields);
-
-    // Collection methods
-    let push_to_collection_methods = push_to_collection_methods(&fields);
-    let pull_from_collection_methods = pull_from_collection_methods(&fields);
-
-    // Counter methods
-    let increment_counter_methods = increment_counter_methods(&args, &fields);
-    let decrement_counter_methods = decrement_counter_methods(&args, &fields);
-
-    // FromRow trait
-    let from_row = from_row(struct_name, &fields);
-
-    // Current model rules
-    let find_model_query_rule = find_model_query_rule(struct_name, &args, &fields);
-    let find_model_rule = find_model_rule(struct_name, &args, &fields);
-    let find_first_model_rule = find_first_model_rule(struct_name, &args, &fields);
-    let update_model_query_rule = update_model_query_rule(struct_name, &args, &fields);
-
-    // Associated functions for finding by primary key
-    let find_by_key_funs = find_by_primary_keys_functions(struct_name, &args, &fields);
-    let find_all_fun = find_all_function(struct_name, &args, &fields);
-    let delete_by_cks_funs = delete_by_primary_key_functions(struct_name, &args, &fields);
-
     let expanded = quote! {
-        #[derive(charybdis::SerializeRow)]
+        #[derive(charybdis::macros::scylla::SerializeRow)]
         #input
 
         impl #struct_name {
@@ -90,12 +108,22 @@ pub fn charybdis_model(args: TokenStream, input: TokenStream) -> TokenStream {
             #find_all_fun
             #delete_by_cks_funs
 
+            #find_by_local_secondary_index_funs
+            #find_by_global_secondary_index_funs
+
             #push_to_collection_consts
+            #push_to_collection_consts_if_exists
+
             #pull_from_collection_consts
+            #pull_from_collection_consts_if_exists
 
             // methods
             #push_to_collection_methods
+            #push_to_collection_methods_if_exists
+
             #pull_from_collection_methods
+            #pull_from_collection_methods_if_exists
+
             #increment_counter_methods
             #decrement_counter_methods
         }
@@ -108,7 +136,8 @@ pub fn charybdis_model(args: TokenStream, input: TokenStream) -> TokenStream {
             // consts
             #db_model_name_const
             #find_by_primary_key_query_const
-            #find_by_partition_key_query_const
+            #find_by_partition_key_query_consts
+            #find_first_by_partition_key_query_const
 
             // methods
             #primary_key_values_method
@@ -125,7 +154,7 @@ pub fn charybdis_model(args: TokenStream, input: TokenStream) -> TokenStream {
 
         }
 
-        impl charybdis::FromRow for #struct_name {
+        impl charybdis::scylla::FromRow for #struct_name {
             #from_row
         }
 
@@ -134,45 +163,48 @@ pub fn charybdis_model(args: TokenStream, input: TokenStream) -> TokenStream {
         #find_first_model_rule
         #update_model_query_rule
         #partial_model_generator
+        #delete_model_query_rule
+        #delete_model_rule
     };
 
     TokenStream::from(expanded)
 }
 
-/// Generates the implementation of the MaterializedView trait
-/// for the given struct.
 #[proc_macro_attribute]
 pub fn charybdis_view_model(args: TokenStream, input: TokenStream) -> TokenStream {
     let args: CharybdisMacroArgs = parse_macro_input!(args);
     let mut input: DeriveInput = parse_macro_input!(input);
-    let fields = CharybdisFields::from_input(&input, &args);
+    let mut new_fields = CharybdisFields::from_input(&input, &args);
+    let fields = new_fields.populate(&args);
 
-    CharybdisFields::strip_charybdis_attributes(&mut input);
-
-    let struct_name = &input.ident;
+    let struct_name = &input.ident.clone();
 
     // Charybdis::BaseModel types
-    let primary_key_type = primary_key_type(&fields);
-    let partition_key_type = partition_key_type(&fields);
+    let primary_key_type = primary_key_type(fields);
+    let partition_key_type = partition_key_type(fields);
 
     // Charybdis::MaterializedView consts
     let db_model_name_const = db_model_name_const(&args);
-    let find_by_primary_key_query_const = find_by_primary_key_query_const(&args, &fields);
-    let find_by_partition_key_query_const = find_by_partition_key_query_const(&args, &fields);
+    let find_by_primary_key_query_const = find_by_primary_key_query_const(&args, fields);
+    let find_by_partition_key_query_consts = find_by_partition_key_query_consts(&args, fields);
+    let find_first_by_partition_key_query_const = find_first_by_partition_key_query_const(&args, fields);
 
     // Charybdis::BaseModel methods
-    let primary_key_values_method = primary_key_values_method(&fields);
-    let partition_key_values_method = partition_key_values_method(&fields);
+    let primary_key_values_method = primary_key_values_method(fields);
+    let partition_key_values_method = partition_key_values_method(fields);
 
     // Current model rules
-    let find_model_query_rule = find_model_query_rule(struct_name, &args, &fields);
+    let find_model_query_rule = find_model_query_rule(struct_name, &args, fields);
 
-    // Associated functions for finding by  primary key
-    let find_by_key_funs = find_by_primary_keys_functions(struct_name, &args, &fields);
+    // Associated functions
+    let find_by_key_funs = find_by_primary_keys_functions(struct_name, &args, fields);
+
+    CharybdisFields::proxy_charybdis_attrs_to_scylla(&mut input);
+    CharybdisFields::strip_charybdis_attributes(&mut input);
 
     let expanded = quote! {
-        #[derive(charybdis::SerializeRow)]
-        #[derive(charybdis::FromRow)]
+        #[derive(charybdis::macros::scylla::SerializeRow)]
+        #[derive(charybdis::macros::scylla::FromRow)]
         #input
 
         impl #struct_name {
@@ -187,7 +219,8 @@ pub fn charybdis_view_model(args: TokenStream, input: TokenStream) -> TokenStrea
             // consts
             #db_model_name_const
             #find_by_primary_key_query_const
-            #find_by_partition_key_query_const
+            #find_by_partition_key_query_consts
+            #find_first_by_partition_key_query_const
 
             // methods
             #primary_key_values_method
@@ -205,28 +238,10 @@ pub fn charybdis_view_model(args: TokenStream, input: TokenStream) -> TokenStrea
 #[proc_macro_attribute]
 pub fn charybdis_udt_model(_: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named_fields) => named_fields,
-            _ => panic!("#[charybdis_model] works only for structs with named fields!"),
-        },
-        _ => panic!("#[charybdis_model] works only on structs!"),
-    };
-
-    let struct_name = &input.ident;
-
-    // sort fields by name
-    // https://github.com/scylladb/scylla-rust-driver/issues/370
-    let mut sorted_fields: Vec<_> = fields.named.iter().collect();
-    sorted_fields.sort_by(|a, b| a.ident.cmp(&b.ident));
 
     let gen = quote! {
-        #[derive(charybdis::FromUserType, Clone)]
-        #[derive(charybdis::SerializeCql)]
-        #[scylla(flavor = "enforce_order", skip_name_checks)]
-        pub struct #struct_name {
-            #(#sorted_fields),*
-        }
+        #[derive(charybdis::macros::scylla::FromUserType, charybdis::macros::scylla::SerializeValue)]
+        #input
     };
 
     gen.into()

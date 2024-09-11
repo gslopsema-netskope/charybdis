@@ -1,5 +1,6 @@
-use proc_macro2::TokenStream;
 use std::collections::HashMap;
+
+use proc_macro2::TokenStream;
 
 enum HashSplitter {
     Line,
@@ -34,7 +35,7 @@ pub(crate) fn hash_expr_lit_to_hash(expr: syn::Expr, cha_attr_name: String) -> H
     let mut parsed_field_types_hash = HashMap::new();
     for pair in HashSplitter::Line.split(&hash) {
         let pair = pair.trim();
-        let pair: Vec<&str> = HashSplitter::Pair.split(&pair);
+        let pair: Vec<&str> = HashSplitter::Pair.split(pair);
 
         if pair.len() != 2 {
             continue;

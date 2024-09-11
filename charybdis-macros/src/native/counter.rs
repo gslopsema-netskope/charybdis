@@ -1,9 +1,12 @@
-use crate::utils::{where_placeholders, FieldsAsTuple};
-use charybdis_parser::fields::CharybdisFields;
-use charybdis_parser::macro_args::CharybdisMacroArgs;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse_str;
+
+use charybdis_parser::fields::CharybdisFields;
+use charybdis_parser::traits::CharybdisMacroArgs;
+
+use crate::traits::fields::FieldsQuery;
+use crate::traits::tuple::FieldsAsTuple;
 
 pub(crate) fn increment_counter_methods(ch_args: &CharybdisMacroArgs, fields: &CharybdisFields) -> TokenStream {
     let increment_counter_methods: Vec<TokenStream> = fields
@@ -19,7 +22,7 @@ pub(crate) fn increment_counter_methods(ch_args: &CharybdisMacroArgs, fields: &C
                 ch_args.table_name(),
                 field.name,
                 field.name,
-                where_placeholders(&fields.primary_key_fields)
+                fields.primary_key_fields.where_placeholders()
             );
 
             let fun_name_str = format!("increment_{}", field.name);
@@ -64,7 +67,7 @@ pub(crate) fn decrement_counter_methods(ch_args: &CharybdisMacroArgs, fields: &C
                 ch_args.table_name(),
                 field.name,
                 field.name,
-                where_placeholders(&fields.primary_key_fields)
+                fields.primary_key_fields.where_placeholders()
             );
 
             let fun_name_str = format!("decrement_{}", field.name);

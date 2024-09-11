@@ -1,8 +1,11 @@
-use crate::utils::{struct_fields_to_fn_args, where_placeholders, Tuple};
-use charybdis_parser::fields::{CharybdisFields, Field};
-use charybdis_parser::macro_args::CharybdisMacroArgs;
 use proc_macro2::TokenStream;
 use quote::quote;
+
+use charybdis_parser::fields::{CharybdisFields, Field};
+use charybdis_parser::traits::CharybdisMacroArgs;
+
+use crate::traits::fields::{FieldsNames, FieldsQuery, FieldsToArguments};
+use crate::traits::tuple::Tuple;
 
 const MAX_DELETE_BY_FUNCTIONS: usize = 3;
 
@@ -20,13 +23,9 @@ const MAX_DELETE_BY_FUNCTIONS: usize = 3;
 /// ```ignore
 ///  User::delete_by_id_and_org_id(session: &Session, org_id: Uuid) -> Result<Vec<User>, errors::CharybdisError>
 ///  User::delete_by_id_and_org_id_and_created_at(session: &Session, org_id: Uuid, created_at: Timestamp) -> Result<Vec<User>, errors::CharybdisError>
-pub(crate) fn delete_by_primary_key_functions(
-    struct_name: &syn::Ident,
-    ch_args: &CharybdisMacroArgs,
-    fields: &CharybdisFields,
-) -> TokenStream {
+pub(crate) fn delete_by_primary_key_functions(ch_args: &CharybdisMacroArgs, fields: &CharybdisFields) -> TokenStream {
     let table_name = ch_args.table_name();
-
+    let partition_keys_len = fields.partition_key_fields.len();
     let primary_key_stack = &fields.primary_key_fields;
     let mut generated = quote! {};
 
@@ -35,23 +34,21 @@ pub(crate) fn delete_by_primary_key_functions(
             break;
         }
 
-        let current_fields = primary_key_stack.iter().take(i + 1).cloned().collect::<Vec<Field>>();
-        let current_field_names = current_fields
-            .iter()
-            .map(|field| field.name.clone())
-            .collect::<Vec<String>>();
+        let current_fields = primary_key_stack.iter().take(i + 1).cloned().collect::<Vec<&Field>>();
+
+        // we need complete partition key to query
+        if current_fields.len() < partition_keys_len {
+            continue;
+        }
+
         let query_str = format!(
             "DELETE FROM {} WHERE {}",
             table_name,
-            where_placeholders(&current_fields)
+            current_fields.where_placeholders()
         );
-        let find_by_fun_name_str = format!("delete_by_{}", current_field_names.join("_and_"));
+        let find_by_fun_name_str = format!("delete_by_{}", current_fields.names().join("_and_"));
         let delete_by_fun_name = syn::Ident::new(&find_by_fun_name_str, proc_macro2::Span::call_site());
-        let arguments = struct_fields_to_fn_args(
-            struct_name.to_string(),
-            fields.db_fields.clone(),
-            current_field_names.clone(),
-        );
+        let arguments = current_fields.to_fn_args();
         let types_tp = arguments.types_tp();
         let values_tp = arguments.values_tp();
 

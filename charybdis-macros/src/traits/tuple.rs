@@ -1,13 +1,14 @@
-use charybdis_parser::fields::Field;
 use proc_macro2::TokenStream;
 use quote::quote;
+
+use charybdis_parser::fields::Field;
 
 pub(crate) trait FieldsAsTuple {
     fn types(&self) -> Vec<syn::Type>;
     fn values(&self) -> Vec<TokenStream>;
 }
 
-impl FieldsAsTuple for Vec<Field> {
+impl FieldsAsTuple for Vec<&Field<'_>> {
     fn types(&self) -> Vec<syn::Type> {
         self.iter().map(|field| field.ty.clone()).collect()
     }

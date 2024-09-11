@@ -1,6 +1,7 @@
-use charybdis_parser::fields::CharybdisFields;
 use quote::{quote, quote_spanned};
 use syn::ImplItem;
+
+use charybdis_parser::fields::CharybdisFields;
 
 pub(crate) fn from_row(struct_name: &syn::Ident, fields: &CharybdisFields) -> ImplItem {
     let fields_count: usize = fields.db_fields.len();
@@ -16,8 +17,8 @@ pub(crate) fn from_row(struct_name: &syn::Ident, fields: &CharybdisFields) -> Im
                     .unwrap(); // vals_iter size is checked before this code is reached, so
                                // it is safe to unwrap
 
-                <#field_type as FromCqlVal<::std::option::Option<CqlValue>>>::from_cql(col_value)
-                    .map_err(|e| FromRowError::BadCqlVal {
+                <#field_type as charybdis::scylla::FromCqlVal<::std::option::Option<charybdis::scylla::CqlValue>>>::from_cql(col_value)
+                    .map_err(|e| charybdis::scylla::FromRowError::BadCqlVal {
                         err: e,
                         column: col_ix,
                     })?
@@ -35,13 +36,12 @@ pub(crate) fn from_row(struct_name: &syn::Ident, fields: &CharybdisFields) -> Im
     });
 
     let generated = quote! {
-        fn from_row(row: charybdis::Row) -> ::std::result::Result<Self, charybdis::FromRowError> {
-                use charybdis::{CqlValue, FromCqlVal, FromRow, FromRowError};
+        fn from_row(row: charybdis::scylla::Row) -> ::std::result::Result<Self, charybdis::scylla::FromRowError> {
                 use ::std::result::Result::{Ok, Err};
                 use ::std::iter::{Iterator, IntoIterator};
 
                 if #fields_count != row.columns.len() {
-                    return Err(FromRowError::WrongRowSize {
+                    return Err(charybdis::scylla::FromRowError::WrongRowSize {
                         expected: #fields_count,
                         actual: row.columns.len(),
                     });

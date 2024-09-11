@@ -1,34 +1,32 @@
-use crate::model::data::ModelData;
-use crate::model::{ModelMigration, ModelType};
-use charybdis_parser::schema::code_schema::CodeSchema;
-use charybdis_parser::schema::db_schema::DbSchema;
-use charybdis_parser::schema::SchemaObject;
 use colored::Colorize;
 use scylla::Session;
 
-pub(crate) struct Migration<'a> {
-    current_db_schema: &'a DbSchema,
-    current_code_schema: &'a CodeSchema,
+use crate::args::Args;
+use crate::model::data::ModelData;
+use crate::model::{ModelMigration, ModelType};
+
+use charybdis_parser::schema::code_schema::CodeSchema;
+use charybdis_parser::schema::db_schema::DbSchema;
+use charybdis_parser::schema::SchemaObject;
+
+pub struct Migration<'a> {
+    current_db_schema: DbSchema,
+    current_code_schema: CodeSchema,
     session: &'a Session,
-    drop_and_replace: bool,
+    args: Args,
 }
 
 impl<'a> Migration<'a> {
-    pub(crate) fn new(
-        current_db_schema: &'a DbSchema,
-        current_code_schema: &'a CodeSchema,
-        session: &'a Session,
-        drop_and_replace: bool,
-    ) -> Self {
+    pub fn new(current_db_schema: DbSchema, current_code_schema: CodeSchema, session: &'a Session, args: Args) -> Self {
         Migration {
             current_db_schema,
             current_code_schema,
             session,
-            drop_and_replace,
+            args,
         }
     }
 
-    pub(crate) async fn run(&self) {
+    pub async fn run(&self) {
         self.run_udts().await;
         self.run_tables().await;
         self.run_materialized_views().await;
@@ -36,8 +34,14 @@ impl<'a> Migration<'a> {
         println!("\n{}", "Migration plan ran successfully!".bright_green());
     }
 
+    pub async fn write_schema_to_json(&self) {
+        DbSchema::new(&self.session, self.args.keyspace.clone())
+            .await
+            .write_schema_to_json(&self.args.project_root);
+    }
+
     async fn run_udts(&self) {
-        let empty_udt = SchemaObject::new();
+        let empty_udt = SchemaObject::default();
 
         for (name, code_udt_schema) in self.current_code_schema.udts.iter() {
             let model_data = ModelData::new(
@@ -47,14 +51,14 @@ impl<'a> Migration<'a> {
                 self.current_db_schema.udts.get(name).unwrap_or(&empty_udt),
             );
 
-            let migration = ModelMigration::new(&model_data, self.session, self.drop_and_replace);
+            let migration = ModelMigration::new(&model_data, &self.session, &self.args);
 
             migration.run().await;
         }
     }
 
     async fn run_tables(&self) {
-        let empty_table = SchemaObject::new();
+        let empty_table = SchemaObject::default();
 
         for (name, code_table_schema) in self.current_code_schema.tables.iter() {
             let model_data = ModelData::new(
@@ -64,14 +68,14 @@ impl<'a> Migration<'a> {
                 self.current_db_schema.tables.get(name).unwrap_or(&empty_table),
             );
 
-            let migration = ModelMigration::new(&model_data, self.session, self.drop_and_replace);
+            let migration = ModelMigration::new(&model_data, &self.session, &self.args);
 
             migration.run().await;
         }
     }
 
     async fn run_materialized_views(&self) {
-        let empty_mv = SchemaObject::new();
+        let empty_mv = SchemaObject::default();
 
         for (name, code_mv_schema) in self.current_code_schema.materialized_views.iter() {
             let model_data = ModelData::new(
@@ -81,7 +85,7 @@ impl<'a> Migration<'a> {
                 self.current_db_schema.materialized_views.get(name).unwrap_or(&empty_mv),
             );
 
-            let migration = ModelMigration::new(&model_data, self.session, self.drop_and_replace);
+            let migration = ModelMigration::new(&model_data, &self.session, &self.args);
 
             migration.run().await;
         }

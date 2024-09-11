@@ -1,13 +1,30 @@
-mod parser;
-
-use crate::schema::{SchemaObject, SchemaObjects};
-use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::path::PathBuf;
+
+use colored::Colorize;
+use serde::{Deserialize, Serialize};
 use walkdir::{DirEntry, WalkDir};
 
-const MODEL_MACRO_NAME: &str = "charybdis_model";
-const MATERIALIZED_VIEW_MACRO_NAME: &str = "charybdis_view_model";
-const UDT_MACRO_NAME: &str = "charybdis_udt_model";
+use crate::schema::{SchemaObject, SchemaObjects};
+
+mod parser;
+
+#[derive(Eq, PartialEq)]
+pub(crate) enum ModelMacro {
+    Table,
+    Udt,
+    MaterializedView,
+}
+
+impl Display for ModelMacro {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelMacro::Table => write!(f, "charybdis_model"),
+            ModelMacro::MaterializedView => write!(f, "charybdis_view_model"),
+            ModelMacro::Udt => write!(f, "charybdis_udt_model"),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct CodeSchema {
@@ -17,7 +34,7 @@ pub struct CodeSchema {
 }
 
 impl CodeSchema {
-    pub fn new(project_root: &PathBuf) -> CodeSchema {
+    pub fn new(project_root: &String) -> CodeSchema {
         let mut current_code_schema = CodeSchema {
             tables: SchemaObjects::new(),
             udts: SchemaObjects::new(),
@@ -29,76 +46,63 @@ impl CodeSchema {
         current_code_schema
     }
 
-    pub fn get_models_from_code(&mut self, project_root: &PathBuf) {
-        if let Some(models_base_dir) = parser::find_src_models_dir(project_root) {
-            for entry in WalkDir::new(&models_base_dir) {
-                let entry: DirEntry = entry.unwrap();
+    pub fn get_models_from_code(&mut self, project_root: &String) {
+        let project_root: PathBuf = PathBuf::from(project_root);
+        for entry in WalkDir::new(project_root) {
+            let entry: DirEntry = entry.unwrap();
 
-                if entry.path().is_file() {
-                    let path = entry.path().to_str().unwrap();
+            if entry.path().is_file() {
+                let path = entry.path().to_str().unwrap();
 
-                    if path.contains("mod.rs") || !path.ends_with(".rs") {
-                        continue;
-                    }
-
-                    let entry_path = entry.path().to_str().unwrap().to_string();
-
-                    if entry_path.contains("materialized_views") {
-                        self.populate_materialized_views(entry);
-                    } else if entry_path.contains("udts") {
-                        self.populate_udts(entry);
-                    } else {
-                        self.populate_tables(entry);
-                    }
+                if !path.ends_with(".rs") {
+                    continue;
                 }
+
+                let file_content: String = parser::parse_file_as_string(entry.path());
+                let ast: syn::File = syn::parse_file(&file_content)
+                    .map_err(|e| {
+                        println!(
+                            "{}\n",
+                            format!("Error parsing file: {}", file_content).bright_red().bold()
+                        );
+                        e
+                    })
+                    .unwrap();
+
+                self.populate_materialized_views(&ast);
+                self.populate_udts(&ast);
+                self.populate_tables(&ast);
             }
-        } else {
-            eprintln!("Could not find 'src/models' directory.");
         }
     }
 
-    pub fn populate_materialized_views(&mut self, entry: DirEntry) {
-        let file_content: String = parser::parse_file_as_string(entry.path());
-        let schema_object: SchemaObject =
-            parser::parse_charybdis_model_def(&file_content, MATERIALIZED_VIEW_MACRO_NAME);
-        let table_name = schema_object.table_name.clone();
+    pub fn populate_materialized_views(&mut self, ast: &syn::File) {
+        let schema_objects: Vec<SchemaObject> = parser::parse_charybdis_model_def(ast, ModelMacro::MaterializedView);
 
-        if table_name.is_empty() {
-            panic!(
-                "Could not find {} macro for file: {}",
-                MATERIALIZED_VIEW_MACRO_NAME,
-                entry.path().to_str().unwrap()
-            );
-        }
+        schema_objects.into_iter().for_each(|schema_object| {
+            let table_name = schema_object.table_name.clone();
 
-        self.materialized_views.insert(table_name, schema_object);
+            self.materialized_views.insert(table_name, schema_object);
+        });
     }
 
-    pub fn populate_udts(&mut self, entry: DirEntry) {
-        let file_content: String = parser::parse_file_as_string(entry.path());
-        let schema_object: SchemaObject = parser::parse_charybdis_model_def(&file_content, UDT_MACRO_NAME);
-        let type_name = schema_object.type_name.clone().to_lowercase();
+    pub fn populate_udts(&mut self, ast: &syn::File) {
+        let schema_objects: Vec<SchemaObject> = parser::parse_charybdis_model_def(ast, ModelMacro::Udt);
 
-        if type_name.is_empty() {
-            panic!(
-                "Could not find {} macro for file: {}",
-                UDT_MACRO_NAME,
-                entry.path().to_str().unwrap()
-            );
-        }
+        schema_objects.into_iter().for_each(|schema_object| {
+            let type_name = schema_object.type_name.to_lowercase().clone();
 
-        self.udts.insert(type_name, schema_object);
+            self.udts.insert(type_name, schema_object);
+        });
     }
 
-    pub fn populate_tables(&mut self, entry: DirEntry) {
-        let file_content: String = parser::parse_file_as_string(entry.path());
-        let schema_object: SchemaObject = parser::parse_charybdis_model_def(&file_content, MODEL_MACRO_NAME);
-        let table_name = schema_object.table_name.clone();
+    pub fn populate_tables(&mut self, ast: &syn::File) {
+        let schema_object: Vec<SchemaObject> = parser::parse_charybdis_model_def(ast, ModelMacro::Table);
 
-        if table_name.is_empty() {
-            return;
-        }
+        schema_object.into_iter().for_each(|schema_object| {
+            let table_name = schema_object.table_name.clone();
 
-        self.tables.insert(table_name, schema_object);
+            self.tables.insert(table_name, schema_object);
+        });
     }
 }
